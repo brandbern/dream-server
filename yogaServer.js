@@ -146,6 +146,40 @@ const typeDefs = `
     favorite: Favorite!
   }
 
+  type Comment {
+    id: ID!
+    dreamId: String!
+    userId: String!
+    content: String!
+    parentId: String
+    createdAt: String!
+    updatedAt: String!
+    user: User!
+    replies: [Comment!]!
+    likeCount: Int!
+    likedByMe: Boolean!
+  }
+
+  type DreamLike {
+    id: ID!
+    dreamId: String!
+    userId: String!
+    createdAt: String!
+  }
+
+  type CommentLike {
+    id: ID!
+    commentId: String!
+    userId: String!
+    createdAt: String!
+  }
+
+  extend type Dream {
+    comments: [Comment!]!
+    likeCount: Int!
+    likedByMe: Boolean!
+  }
+
   type Query {
     users: [User!]!
     user(authID: String!): User
@@ -154,6 +188,7 @@ const typeDefs = `
     userFavorites: [Favorite!]!
     userNotes: [Note!]!
     note(favoriteId: ID!): Note
+    comments(dreamId: ID!): [Comment!]!
   }
 
   input DreamWhereInput {
@@ -203,6 +238,12 @@ const typeDefs = `
     ): Dream!
     toggleFavorite(dreamId: ID!): Boolean!
     saveNote(favoriteId: ID!, content: String!): Note!
+    addComment(dreamId: ID!, content: String!, parentId: ID): Comment!
+    deleteComment(commentId: ID!): Boolean!
+    likeDream(dreamId: ID!): Boolean!
+    unlikeDream(dreamId: ID!): Boolean!
+    likeComment(commentId: ID!): Boolean!
+    unlikeComment(commentId: ID!): Boolean!
   }
 `
 
@@ -319,6 +360,12 @@ const resolvers = {
             }
           }
         }
+      })
+    },
+    comments: async (parent, { dreamId }) => {
+      return await prisma.comment.findMany({
+        where: { dreamId, parentId: null },
+        orderBy: { createdAt: 'asc' }
       })
     }
   },
@@ -585,6 +632,58 @@ const resolvers = {
         console.error('Error saving note:', error)
         throw new Error(`Failed to save note: ${error.message}`)
       }
+    },
+    addComment: async (parent, { dreamId, content, parentId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      const comment = await prisma.comment.create({
+        data: {
+          dreamId,
+          userId: context.user.id,
+          content,
+          parentId: parentId || null
+        }
+      })
+      return comment
+    },
+    deleteComment: async (parent, { commentId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      const comment = await prisma.comment.findUnique({ where: { id: commentId } })
+      if (!comment) throw new Error('Comment not found')
+      if (comment.userId !== context.user.id) throw new Error('Not authorized')
+      await prisma.comment.delete({ where: { id: commentId } })
+      return true
+    },
+    likeDream: async (parent, { dreamId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      await prisma.dreamLike.upsert({
+        where: { dreamId_userId: { dreamId, userId: context.user.id } },
+        update: {},
+        create: { dreamId, userId: context.user.id }
+      })
+      return true
+    },
+    unlikeDream: async (parent, { dreamId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      await prisma.dreamLike.deleteMany({
+        where: { dreamId, userId: context.user.id }
+      })
+      return true
+    },
+    likeComment: async (parent, { commentId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      await prisma.commentLike.upsert({
+        where: { commentId_userId: { commentId, userId: context.user.id } },
+        update: {},
+        create: { commentId, userId: context.user.id }
+      })
+      return true
+    },
+    unlikeComment: async (parent, { commentId }, context) => {
+      if (!context.user) throw new Error('Not authenticated')
+      await prisma.commentLike.deleteMany({
+        where: { commentId, userId: context.user.id }
+      })
+      return true
     }
   },
   User: {
@@ -629,6 +728,22 @@ const resolvers = {
       })
       
       return !!favorite
+    },
+    comments: async (parent) => {
+      return await prisma.comment.findMany({
+        where: { dreamId: parent.id, parentId: null },
+        orderBy: { createdAt: 'asc' }
+      })
+    },
+    likeCount: async (parent) => {
+      return await prisma.dreamLike.count({ where: { dreamId: parent.id } })
+    },
+    likedByMe: async (parent, args, context) => {
+      if (!context.user) return false
+      const like = await prisma.dreamLike.findUnique({
+        where: { dreamId_userId: { dreamId: parent.id, userId: context.user.id } }
+      })
+      return !!like
     }
   },
   Favorite: {
@@ -677,6 +792,33 @@ const resolvers = {
           dream: { include: { user: true } }
         }
       })
+    }
+  },
+  Comment: {
+    user: async (parent) => {
+      return await prisma.user.findUnique({ where: { id: parent.userId } })
+    },
+    replies: async (parent) => {
+      return await prisma.comment.findMany({
+        where: { parentId: parent.id },
+        orderBy: { createdAt: 'asc' }
+      })
+    },
+    likeCount: async (parent) => {
+      return await prisma.commentLike.count({ where: { commentId: parent.id } })
+    },
+    likedByMe: async (parent, args, context) => {
+      if (!context.user) return false
+      const like = await prisma.commentLike.findUnique({
+        where: { commentId_userId: { commentId: parent.id, userId: context.user.id } }
+      })
+      return !!like
+    },
+    createdAt: (parent) => {
+      return new Date(parent.createdAt).toISOString()
+    },
+    updatedAt: (parent) => {
+      return new Date(parent.updatedAt).toISOString()
     }
   }
 }
