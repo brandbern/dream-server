@@ -123,6 +123,27 @@ const typeDefs = `
     people: [String]
     places: [String]
     things: [String]
+    isFavorited: Boolean
+  }
+
+  type Favorite {
+    id: ID!
+    userId: String!
+    dreamId: String!
+    createdAt: String!
+    user: User!
+    dream: Dream!
+  }
+
+  type Note {
+    id: ID!
+    userId: String!
+    dreamId: String!
+    content: String!
+    createdAt: String!
+    updatedAt: String!
+    user: User!
+    dream: Dream!
   }
 
   type Query {
@@ -130,6 +151,9 @@ const typeDefs = `
     user(authID: String!): User
     dreams(where: DreamWhereInput): [Dream!]!
     allDreams: [Dream!]!
+    userFavorites: [Favorite!]!
+    userNotes: [Note!]!
+    note(dreamId: ID!): Note
   }
 
   input DreamWhereInput {
@@ -177,6 +201,8 @@ const typeDefs = `
       places: [String],
       things: [String]
     ): Dream!
+    toggleFavorite(dreamId: ID!): Boolean!
+    saveNote(dreamId: ID!, content: String!): Note!
   }
 `
 
@@ -195,7 +221,7 @@ const resolvers = {
     dreams: async (parent, args, context) => {
       const userId = context.user.id
 
-      return await prisma.dream.findMany({
+      const dreams = await prisma.dream.findMany({
         where: {
           user: { id: userId }
         },
@@ -203,11 +229,91 @@ const resolvers = {
           user: true
         }
       })
+      
+      // Add isFavorited field for each dream
+      const userFavorites = await prisma.favorite.findMany({
+        where: { userId },
+        select: { dreamId: true }
+      })
+      const favoritedDreamIds = new Set(userFavorites.map(f => f.dreamId))
+      
+      return dreams.map(dream => ({
+        ...dream,
+        isFavorited: favoritedDreamIds.has(dream.id)
+      }))
     },
     allDreams: async (parent, args, context) => {
-      return await prisma.dream.findMany({
+      const dreams = await prisma.dream.findMany({
         include: {
           user: true
+        }
+      })
+      
+      // Add isFavorited field for each dream (only if user is authenticated)
+      if (context.user) {
+        const userId = context.user.id
+        const userFavorites = await prisma.favorite.findMany({
+          where: { userId },
+          select: { dreamId: true }
+        })
+        const favoritedDreamIds = new Set(userFavorites.map(f => f.dreamId))
+        
+        return dreams.map(dream => ({
+          ...dream,
+          isFavorited: favoritedDreamIds.has(dream.id)
+        }))
+      } else {
+        // For non-authenticated users, return dreams without favorite status
+        return dreams.map(dream => ({
+          ...dream,
+          isFavorited: false
+        }))
+      }
+    },
+    userFavorites: async (parent, args, context) => {
+      const userId = context.user.id
+      return await prisma.favorite.findMany({
+        where: { userId },
+        include: {
+          user: true,
+          dream: {
+            include: {
+              user: true
+            }
+          }
+        }
+      })
+    },
+    userNotes: async (parent, args, context) => {
+      const userId = context.user.id
+      return await prisma.note.findMany({
+        where: { userId },
+        include: {
+          user: true,
+          dream: {
+            include: {
+              user: true
+            }
+          }
+        }
+      })
+    },
+    note: async (parent, { dreamId }, context) => {
+      const userId = context.user.id
+      return await prisma.note.findUnique({
+        where: {
+          userId_dreamId: {
+            userId,
+            dreamId
+          }
+        },
+        include: {
+          user: true,
+          dream: {
+            include: {
+              user: true
+            }
+          }
         }
       })
     }
@@ -395,6 +501,103 @@ const resolvers = {
         console.error('Error updating dream:', error)
         throw new Error(`Failed to update dream: ${error.message}`)
       }
+    },
+    toggleFavorite: async (parent, { dreamId }, context) => {
+      try {
+        const userId = context.user.id
+        
+        // Check if the dream exists
+        const dream = await prisma.dream.findUnique({
+          where: { id: dreamId }
+        })
+        
+        if (!dream) {
+          throw new Error('Dream not found')
+        }
+        
+        // Check if already favorited
+        const existingFavorite = await prisma.favorite.findUnique({
+          where: {
+            userId_dreamId: {
+              userId,
+              dreamId
+            }
+          }
+        })
+        
+        if (existingFavorite) {
+          // Remove favorite
+          await prisma.favorite.delete({
+            where: {
+              userId_dreamId: {
+                userId,
+                dreamId
+              }
+            }
+          })
+          console.log(`Favorite removed for dream ${dreamId} by user ${userId}`)
+          return false
+        } else {
+          // Add favorite
+          await prisma.favorite.create({
+            data: {
+              userId,
+              dreamId
+            }
+          })
+          console.log(`Favorite added for dream ${dreamId} by user ${userId}`)
+          return true
+        }
+      } catch (error) {
+        console.error('Error toggling favorite:', error)
+        throw new Error(`Failed to toggle favorite: ${error.message}`)
+      }
+    },
+    saveNote: async (parent, { dreamId, content }, context) => {
+      try {
+        const userId = context.user.id
+        
+        // Check if the dream exists
+        const dream = await prisma.dream.findUnique({
+          where: { id: dreamId }
+        })
+        
+        if (!dream) {
+          throw new Error('Dream not found')
+        }
+        
+        // Upsert note (create or update)
+        const note = await prisma.note.upsert({
+          where: {
+            userId_dreamId: {
+              userId,
+              dreamId
+            }
+          },
+          update: {
+            content
+          },
+          create: {
+            userId,
+            dreamId,
+            content
+          },
+          include: {
+            user: true,
+            dream: {
+              include: {
+                user: true
+              }
+            }
+          }
+        })
+        
+        console.log(`Note saved for dream ${dreamId} by user ${userId}`)
+        return note
+      } catch (error) {
+        console.error('Error saving note:', error)
+        throw new Error(`Failed to save note: ${error.message}`)
+      }
     }
   },
   User: {
@@ -433,6 +636,59 @@ const resolvers = {
       return await prisma.user.findUnique({
         where: { id: parent.userId }
       })
+    },
+    isFavorited: async (parent, args, context) => {
+      if (!context?.user?.id) return false
+      
+      const favorite = await prisma.favorite.findUnique({
+        where: {
+          userId_dreamId: {
+            userId: context.user.id,
+            dreamId: parent.id
+          }
+        }
+      })
+      
+      return !!favorite
+    }
+  },
+  Favorite: {
+    createdAt: (parent) => {
+      return parent.createdAt.toISOString()
+    },
+    user: async parent => {
+      return await prisma.user.findUnique({
+        where: { id: parent.userId }
+      })
+    },
+    dream: async parent => {
+      return await prisma.dream.findUnique({
+        where: { id: parent.dreamId },
+        include: {
+          user: true
+        }
+      })
+    }
+  },
+  Note: {
+    createdAt: (parent) => {
+      return parent.createdAt.toISOString()
+    },
+    updatedAt: (parent) => {
+      return parent.updatedAt.toISOString()
+    },
+    user: async parent => {
+      return await prisma.user.findUnique({
+        where: { id: parent.userId }
+      })
+    },
+    dream: async parent => {
+      return await prisma.dream.findUnique({
+        where: { id: parent.dreamId },
+        include: {
+          user: true
+        }
+      })
     }
   }
 }
@@ -443,19 +699,15 @@ const yoga = createYoga({
   schema,
   context: async ({ request }) => {
     const authHeader = request.headers.get('authorization')
+    
+    // Allow requests without authentication for public queries
     if (!authHeader) {
-      console.error('Authorization header missing')
-      throw new Error(
-        'Authorization header missing. Please ensure you are sending the Authorization header with your request.'
-      )
+      return { request, user: null }
     }
 
     const token = authHeader.split(' ')[1]
     if (!token) {
-      console.error('Token missing in Authorization header')
-      throw new Error(
-        'Token missing in Authorization header. Please ensure your Authorization header is in the format "Bearer <token>".'
-      )
+      return { request, user: null }
     }
 
     try {
@@ -463,11 +715,11 @@ const yoga = createYoga({
       return { request, user }
     } catch (error) {
       console.error('Error during user authentication:', error)
-      throw new Error('Authentication failed')
+      return { request, user: null }
     }
   },
   cors: {
-    origin: 'http://localhost:3000',
+    origin: ['http://localhost:3000', 'http://192.168.0.65:3000', 'https://localhost:3000', 'https://192.168.0.65:3000'],
     credentials: true,
     methods: ['POST', 'GET'],
     allowedHeaders: ['Content-Type', 'Authorization']
