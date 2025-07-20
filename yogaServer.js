@@ -29,6 +29,10 @@ const authenticateUser = async token => {
     throw new Error('No token provided')
   }
 
+  console.log('Authenticating token, length:', token.length)
+
+
+
   try {
     return new Promise((resolve, reject) => {
       jwt.verify(
@@ -44,6 +48,8 @@ const authenticateUser = async token => {
             return reject('Authentication failed')
           }
 
+          console.log('JWT decoded successfully:', { sub: decoded.sub, email: decoded.email })
+
           const { sub: auth0Id, email } = decoded
 
           let user = await prisma.user.findUnique({
@@ -51,16 +57,32 @@ const authenticateUser = async token => {
           })
 
           if (!user) {
-            console.log('User not found, creating a new user')
-            user = await prisma.user.create({
-              data: {
-                auth0Id,
-                email
-              }
+            // Check if a user with this email already exists
+            const existingUserByEmail = await prisma.user.findUnique({
+              where: { email }
             })
-            console.log('New user created:', user)
+
+            if (existingUserByEmail) {
+              // Update the existing user's auth0Id to match the current login
+              console.log('User with email exists, updating auth0Id')
+              user = await prisma.user.update({
+                where: { email },
+                data: { auth0Id }
+              })
+              console.log('User auth0Id updated:', user.id)
+            } else {
+              // Create a new user
+              console.log('User not found, creating a new user')
+              user = await prisma.user.create({
+                data: {
+                  auth0Id,
+                  email
+                }
+              })
+              console.log('New user created:', user.id)
+            }
           } else {
-            console.log('User found:', user)
+            console.log('User found:', user.id)
           }
 
           resolve(user)
@@ -92,8 +114,15 @@ const typeDefs = `
     description: String!
     image: String
     isPublic: Boolean!
-    tags: [String!]!
+    tags: [String]
     user: User!
+    mood: String
+    emotions: [String]
+    colors: [String]
+    role: Boolean
+    people: [String]
+    places: [String]
+    things: [String]
   }
 
   type Query {
@@ -114,9 +143,40 @@ const typeDefs = `
   type Mutation {
     authenticateUser: User
     addUser(auth0Id: String!, email: String!, name: String): User!
+    updateUser(
+      firstName: String,
+      lastName: String,
+      picture: String
+    ): User!
     deleteUser(auth0Id: String!): Boolean!
-    addDream(userId: ID!, title: String!, date: String!, description: String!, image: String, isPublic: Boolean!, tags: [String!]!): Dream!
+    addDream(
+      title: String!,
+      date: String!,
+      description: String!,
+      image: String,
+      isPublic: Boolean!,
+      tags: [String],
+      mood: String,
+      emotions: [String],
+      colors: [String],
+      role: Boolean,
+      people: [String],
+      places: [String],
+      things: [String]
+    ): Dream!
     deleteDream(dreamId: ID!): Boolean!
+    updateDream(
+      id: ID!,
+      title: String!,
+      description: String!,
+      mood: String,
+      emotions: [String],
+      colors: [String],
+      role: Boolean,
+      people: [String],
+      places: [String],
+      things: [String]
+    ): Dream!
   }
 `
 
@@ -168,6 +228,26 @@ const resolvers = {
         throw new Error('Failed to add new user')
       }
     },
+    updateUser: async (parent, { firstName, lastName, picture }, context) => {
+      try {
+        const userId = context.user.id
+        
+        const updatedUser = await prisma.user.update({
+          where: { id: userId },
+          data: {
+            firstName,
+            lastName,
+            picture
+          }
+        })
+        
+        console.log(`User with id ${userId} updated successfully.`)
+        return updatedUser
+      } catch (error) {
+        console.error('Error updating user:', error)
+        throw new Error(`Failed to update user: ${error.message}`)
+      }
+    },
     deleteUser: async (parent, { auth0Id }, context) => {
       try {
         const user = await prisma.user.findUnique({
@@ -191,19 +271,27 @@ const resolvers = {
     },
     addDream: async (
       parent,
-      { userId, title, date, description, image, isPublic, tags },
+      {
+        title,
+        date,
+        description,
+        image,
+        isPublic,
+        tags,
+        mood,
+        emotions,
+        colors,
+        role,
+        people,
+        places,
+        things
+      },
       context
     ) => {
       try {
-        console.log('Adding dream with data:', {
-          userId,
-          title,
-          date,
-          description,
-          image,
-          isPublic,
-          tags
-        }) // Log input data
+        // Use the authenticated user's ID from context
+        const userId = context.user.id
+        
         const newDream = await prisma.dream.create({
           data: {
             title,
@@ -212,13 +300,23 @@ const resolvers = {
             image,
             isPublic,
             tags,
-            user: { connect: { auth0Id: userId } } // Connect using auth0Id
+            user: { connect: { id: userId } },
+            mood,
+            emotions,
+            colors,
+            role,
+            people,
+            places,
+            things
+          },
+          include: {
+            user: true
           }
         })
         return newDream
       } catch (error) {
         console.error('Error adding new dream:', error)
-        throw new Error('Failed to add new dream')
+        throw new Error(`Failed to add new dream: ${error.message}`)
       }
     },
     deleteDream: async (parent, { dreamId }, context) => {
@@ -241,9 +339,69 @@ const resolvers = {
         console.error('Error deleting dream:', error)
         return false
       }
+    },
+    updateDream: async (
+      parent,
+      {
+        id,
+        title,
+        description,
+        mood,
+        emotions,
+        colors,
+        role,
+        people,
+        places,
+        things
+      },
+      context
+    ) => {
+      try {
+        // Check if the dream exists and belongs to the authenticated user
+        const existingDream = await prisma.dream.findUnique({
+          where: { id },
+          include: { user: true }
+        })
+
+        if (!existingDream) {
+          throw new Error('Dream not found')
+        }
+
+        if (existingDream.user.id !== context.user.id) {
+          throw new Error('Unauthorized: You can only update your own dreams')
+        }
+
+        const updatedDream = await prisma.dream.update({
+          where: { id },
+          data: {
+            title,
+            description,
+            mood,
+            emotions,
+            colors,
+            role,
+            people,
+            places,
+            things
+          },
+          include: {
+            user: true
+          }
+        })
+
+        console.log(`Dream with id ${id} updated successfully.`)
+        return updatedDream
+      } catch (error) {
+        console.error('Error updating dream:', error)
+        throw new Error(`Failed to update dream: ${error.message}`)
+      }
     }
   },
   User: {
+    createdAt: (parent) => {
+      // Convert DateTime to ISO string for GraphQL
+      return parent.createdAt.toISOString()
+    },
     dreams: async parent => {
       return await prisma.dream.findMany({
         where: { userId: parent.id }
@@ -251,6 +409,26 @@ const resolvers = {
     }
   },
   Dream: {
+    date: (parent) => {
+      // Convert DateTime to ISO string for GraphQL
+      console.log('🔍 Backend date resolver called!')
+      console.log('🔍 parent:', parent)
+      console.log('🔍 parent.date:', parent.date, typeof parent.date)
+      
+      if (!parent.date) {
+        console.log('🔍 No date found, returning null')
+        return null
+      }
+      
+      try {
+        const isoString = parent.date.toISOString()
+        console.log('🔍 Backend date resolver - converted to:', isoString)
+        return isoString
+      } catch (error) {
+        console.log('🔍 Error converting date:', error)
+        return null
+      }
+    },
     user: async parent => {
       return await prisma.user.findUnique({
         where: { id: parent.userId }

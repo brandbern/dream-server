@@ -12,12 +12,21 @@ model Dream {
   title       String
   date        DateTime
   description String
-  image       String?
+  image       String?    // Optional
   isPublic    Boolean
-  tags        String[]
+  tags        String[]   // Required list (non-nullable but can be an empty array)
   userId      String
+  mood        String?    // Optional
+  emotions    String[]   // Required list (non-nullable but can be an empty array)
+  colors      String[]   // Required list (non-nullable but can be an empty array)
+  role        Boolean?   // Optional
+  people      String[]   // Required list (non-nullable but can be an empty array)
+  places      String[]   // Required list (non-nullable but can be an empty array)
+  things      String[]   // Required list (non-nullable but can be an empty array)
   user        User      @relation(fields: [userId], references: [id])
 }
+
+
 
 model User {
   id        String   @id @default(uuid())
