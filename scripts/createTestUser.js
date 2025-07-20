@@ -2,10 +2,15 @@ import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
+// Test Credentials:
+// Email: test@test.com
+// Password: Test123!
+// Auth0 ID: auth0|687c95d1e8da9dc2af0a07ec
+
 // Test user data
 const testUser = {
-  auth0Id: 'auth0|test-user-dreams', // Use existing test user ID
-  email: 'testuser@dreamspeak.com',
+  auth0Id: 'auth0|687c9be68f6ed47bf16a19b6', // Updated test user ID
+  email: 'test@test.com',
   firstName: 'Dream',
   lastName: 'Explorer',
   picture: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=150&h=150&fit=crop&crop=face'
@@ -237,6 +242,21 @@ const testDreams = [
     people: ['myself', 'friendly dragon'],
     places: ['sky', 'clouds', 'dragon world'],
     things: ['dragon', 'fire breath', 'clouds']
+  },
+  // Dream for the current month
+  {
+    title: 'Dream for This Month',
+    description: 'A dream logged for the current month.',
+    date: new Date(), // today
+    isPublic: true,
+    tags: ['test', 'current month'],
+    mood: 'Exciting',
+    emotions: ['joy'],
+    colors: ['blue'],
+    role: true,
+    people: ['myself'],
+    places: ['home'],
+    things: ['bed']
   }
 ]
 
@@ -250,23 +270,38 @@ async function createTestUser() {
     })
 
     if (!user) {
-      user = await prisma.user.create({
-        data: testUser
+      // Try to find by email
+      user = await prisma.user.findUnique({
+        where: { email: testUser.email }
       })
-      console.log('✅ Test user created:', user.email)
+      if (user) {
+        // Update the user's auth0Id
+        user = await prisma.user.update({
+          where: { email: testUser.email },
+          data: { auth0Id: testUser.auth0Id }
+        })
+        console.log('✅ Test user updated with new auth0Id:', user.email)
+      } else {
+        user = await prisma.user.create({
+          data: testUser
+        })
+        console.log('✅ Test user created:', user.email)
+      }
     } else {
       console.log('✅ Test user already exists:', user.email)
     }
 
-    // Delete existing dreams for this user to start fresh
-    await prisma.dream.deleteMany({
-      where: { userId: user.id }
-    })
-    console.log('🗑️  Cleared existing dreams')
+    // Delete existing dreams, favorites, and notes for this user to start fresh
+    await prisma.note.deleteMany({})
+    await prisma.favorite.deleteMany({ where: { userId: user.id } })
+    await prisma.dream.deleteMany({ where: { userId: user.id } })
+    console.log('🗑️  Cleared existing dreams, favorites, and notes')
 
-    // Create all test dreams
-    console.log('Creating test dreams...')
+    // Create all test dreams, favorites, and notes
+    console.log('Creating test dreams, favorites, and notes...')
     const createdDreams = []
+    const createdFavorites = []
+    const createdNotes = []
     
     for (const dreamData of testDreams) {
       const dream = await prisma.dream.create({
@@ -276,10 +311,26 @@ async function createTestUser() {
         }
       })
       createdDreams.push(dream)
-      console.log(`✅ Created dream: ${dream.title}`)
+      // Create a favorite for each dream
+      const favorite = await prisma.favorite.create({
+        data: {
+          userId: user.id,
+          dreamId: dream.id
+        }
+      })
+      createdFavorites.push(favorite)
+      // Create a note for each favorite
+      const note = await prisma.note.create({
+        data: {
+          favoriteId: favorite.id,
+          content: `Test note for dream: ${dream.title}`
+        }
+      })
+      createdNotes.push(note)
+      console.log(`✅ Created dream, favorite, and note: ${dream.title}`)
     }
 
-    console.log(`\n🎉 Successfully created ${createdDreams.length} test dreams!`)
+    console.log(`\n🎉 Successfully created ${createdDreams.length} test dreams, favorites, and notes!`)
     console.log(`\nTest User Details:`)
     console.log(`- Email: ${user.email}`)
     console.log(`- Auth0 ID: ${user.auth0Id}`)

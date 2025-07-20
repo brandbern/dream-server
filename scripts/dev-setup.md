@@ -10,26 +10,26 @@ To test the application with pre-populated data, you'll need to configure Auth0 
 2. Navigate to **Users** → **Create User**
 3. Create a user with these details:
 
-   - **Email**: `testuser@dreamspeak.com`
-   - **Password**: Choose a secure password
+   - **Email**: `test@test.com`
+   - **Password**: `Test123!`
    - **Connection**: Database (or your preferred connection)
 
 4. After creating the user, copy the **User ID** (it should look like `auth0|xxxxxxxxxxxxxxxx`)
 5. Update the `createTestUser.js` script with the correct Auth0 ID:
    ```javascript
    const testUser = {
-     auth0Id: "auth0|xxxxxxxxxxxxxxxx", // Replace with actual ID
-     email: "testuser@dreamspeak.com",
+     auth0Id: "auth0|687c95d1e8da9dc2af0a07ec", // Current test user ID
+     email: "test@test.com",
      // ... rest of the data
    };
    ```
 
 ### Option 2: Use Existing Auth0 ID
 
-If you want to use the current test user ID (`auth0|test-user-dreams`), you can:
+If you want to use the current test user ID (`auth0|687c95d1e8da9dc2af0a07ec`), you can:
 
-1. Create a user in Auth0 with the email `testuser@dreamspeak.com`
-2. Manually update the user's Auth0 ID in the Auth0 dashboard to `auth0|test-user-dreams`
+1. Create a user in Auth0 with the email `test@test.com`
+2. Manually update the user's Auth0 ID in the Auth0 dashboard to `auth0|687c95d1e8da9dc2af0a07ec`
 
 ### Option 3: Development Mode (Simplest)
 
@@ -42,7 +42,7 @@ For local development, you can temporarily modify the authentication logic to by
      // For development, return test user
      if (token === "dev-token") {
        return await prisma.user.findUnique({
-         where: { auth0Id: "auth0|test-user-dreams" },
+         where: { auth0Id: "auth0|687c95d1e8da9dc2af0a07ec" },
        });
      }
      // ... rest of authentication logic

@@ -5,6 +5,8 @@
   "type": "module",
   "main": "yogaServer.js",
   "scripts": {
+    "start": "node yogaServer.js",
+    "dev": "node yogaServer.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",

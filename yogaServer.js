@@ -1,5 +1,6 @@
 import { createYoga } from 'graphql-yoga'
-import { createServer } from 'http'
+import { createServer } from 'https'
+import { readFileSync } from 'fs'
 import { PrismaClient } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import jwksClient from 'jwks-rsa'
@@ -133,17 +134,16 @@ const typeDefs = `
     createdAt: String!
     user: User!
     dream: Dream!
+    note: Note
   }
 
   type Note {
     id: ID!
-    userId: String!
-    dreamId: String!
+    favoriteId: String!
     content: String!
     createdAt: String!
     updatedAt: String!
-    user: User!
-    dream: Dream!
+    favorite: Favorite!
   }
 
   type Query {
@@ -153,7 +153,7 @@ const typeDefs = `
     allDreams: [Dream!]!
     userFavorites: [Favorite!]!
     userNotes: [Note!]!
-    note(dreamId: ID!): Note
+    note(favoriteId: ID!): Note
   }
 
   input DreamWhereInput {
@@ -202,7 +202,7 @@ const typeDefs = `
       things: [String]
     ): Dream!
     toggleFavorite(dreamId: ID!): Boolean!
-    saveNote(dreamId: ID!, content: String!): Note!
+    saveNote(favoriteId: ID!, content: String!): Note!
   }
 `
 
@@ -286,32 +286,36 @@ const resolvers = {
     },
     userNotes: async (parent, args, context) => {
       const userId = context.user.id
-      return await prisma.note.findMany({
+      // Find all notes for favorites belonging to this user
+      const favorites = await prisma.favorite.findMany({
         where: { userId },
+        select: { id: true }
+      })
+      const favoriteIds = favorites.map(f => f.id)
+      return await prisma.note.findMany({
+        where: { favoriteId: { in: favoriteIds } },
         include: {
-          user: true,
-          dream: {
+          favorite: {
             include: {
-              user: true
+              user: true,
+              dream: { include: { user: true } }
             }
           }
         }
       })
     },
-    note: async (parent, { dreamId }, context) => {
+    note: async (parent, { favoriteId }, context) => {
+      // Only allow access if the favorite belongs to the user
       const userId = context.user.id
+      const favorite = await prisma.favorite.findUnique({ where: { id: favoriteId } })
+      if (!favorite || favorite.userId !== userId) return null
       return await prisma.note.findUnique({
-        where: {
-          userId_dreamId: {
-            userId,
-            dreamId
-          }
-        },
+        where: { favoriteId },
         include: {
-          user: true,
-          dream: {
+          favorite: {
             include: {
-              user: true
+              user: true,
+              dream: { include: { user: true } }
             }
           }
         }
@@ -553,46 +557,29 @@ const resolvers = {
         throw new Error(`Failed to toggle favorite: ${error.message}`)
       }
     },
-    saveNote: async (parent, { dreamId, content }, context) => {
+    saveNote: async (parent, { favoriteId, content }, context) => {
       try {
         const userId = context.user.id
-        
-        // Check if the dream exists
-        const dream = await prisma.dream.findUnique({
-          where: { id: dreamId }
-        })
-        
-        if (!dream) {
-          throw new Error('Dream not found')
+        // Only allow if the favorite belongs to the user
+        const favorite = await prisma.favorite.findUnique({ where: { id: favoriteId } })
+        if (!favorite || favorite.userId !== userId) {
+          throw new Error('Unauthorized or favorite not found')
         }
-        
-        // Upsert note (create or update)
+        // Upsert note by favoriteId
         const note = await prisma.note.upsert({
-          where: {
-            userId_dreamId: {
-              userId,
-              dreamId
-            }
-          },
-          update: {
-            content
-          },
-          create: {
-            userId,
-            dreamId,
-            content
-          },
+          where: { favoriteId },
+          update: { content },
+          create: { favoriteId, content },
           include: {
-            user: true,
-            dream: {
+            favorite: {
               include: {
-                user: true
+                user: true,
+                dream: { include: { user: true } }
               }
             }
           }
         })
-        
-        console.log(`Note saved for dream ${dreamId} by user ${userId}`)
+        console.log(`Note saved for favorite ${favoriteId} by user ${userId}`)
         return note
       } catch (error) {
         console.error('Error saving note:', error)
@@ -614,21 +601,13 @@ const resolvers = {
   Dream: {
     date: (parent) => {
       // Convert DateTime to ISO string for GraphQL
-      console.log('🔍 Backend date resolver called!')
-      console.log('🔍 parent:', parent)
-      console.log('🔍 parent.date:', parent.date, typeof parent.date)
-      
       if (!parent.date) {
-        console.log('🔍 No date found, returning null')
         return null
       }
       
       try {
-        const isoString = parent.date.toISOString()
-        console.log('🔍 Backend date resolver - converted to:', isoString)
-        return isoString
+        return parent.date.toISOString()
       } catch (error) {
-        console.log('🔍 Error converting date:', error)
         return null
       }
     },
@@ -668,6 +647,19 @@ const resolvers = {
           user: true
         }
       })
+    },
+    note: async parent => {
+      return await prisma.note.findUnique({
+        where: { favoriteId: parent.id },
+        include: {
+          favorite: {
+            include: {
+              user: true,
+              dream: { include: { user: true } }
+            }
+          }
+        }
+      })
     }
   },
   Note: {
@@ -677,16 +669,12 @@ const resolvers = {
     updatedAt: (parent) => {
       return parent.updatedAt.toISOString()
     },
-    user: async parent => {
-      return await prisma.user.findUnique({
-        where: { id: parent.userId }
-      })
-    },
-    dream: async parent => {
-      return await prisma.dream.findUnique({
-        where: { id: parent.dreamId },
+    favorite: async parent => {
+      return await prisma.favorite.findUnique({
+        where: { id: parent.favoriteId },
         include: {
-          user: true
+          user: true,
+          dream: { include: { user: true } }
         }
       })
     }
@@ -719,16 +707,23 @@ const yoga = createYoga({
     }
   },
   cors: {
-    origin: ['http://localhost:3000', 'http://192.168.0.65:3000', 'https://localhost:3000', 'https://192.168.0.65:3000'],
+    origin: ['https://localhost:3000', 'https://192.168.0.65:3000'],
     credentials: true,
     methods: ['POST', 'GET'],
     allowedHeaders: ['Content-Type', 'Authorization']
   }
 })
 
-const server = createServer(yoga)
+// HTTPS configuration
+const httpsOptions = {
+  key: readFileSync('../dream-speak/localhost-key.pem'),
+  cert: readFileSync('../dream-speak/localhost.pem')
+}
+
+const server = createServer(httpsOptions, yoga)
 
 const PORT = 4000
-server.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`)
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running on https://localhost:${PORT}`)
+  console.log(`Server is also accessible on https://192.168.0.65:${PORT}`)
 })
